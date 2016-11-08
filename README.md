@@ -17,14 +17,14 @@ The algorithm can be briefly be described as a 7-step procedure:
 
 The algorithm is implemented as a script in Jupyter Notebook. 
 
-# Software requirements
+## Software requirements
 
 The script uses external software, so for it to be executable, the following software is required installed:  
 
 - Brain Extraction Tool (BET2). Can be found here: https://github.com/liangfu/bet2
 - MINC toolkit version 1.9.11. Can be found here: https://bic-mni.github.io/#v2-version-19111911
 
-# Team Members
+## Team Members
 
 - Nina Jacobsen - ninaninjajacobsen@gmail.com
 - Julie Broni Munk - julie-munk@hotmail.com
