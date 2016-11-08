@@ -6,20 +6,20 @@ For the algorithm to be successful, the two models must initially be roughly ali
 
 The algorithm can be briefly be described as a 7-step procedure:
 
-1) A mask, generated using BET2, is applied to both models
+1. A mask, generated using BET2, is applied to both models
 
-2) The model with the contrast, to which the other model is matched to, is blurred
+2. The model with the contrast, to which the other model is matched to, is blurred
 
-3) Both models are preprocessed in preparation for the core function
+3. Both models are preprocessed in preparation for the core function
 
-4) Core function is executed: 
-  4.1) The core funtion is an intensity value lookup between the two models, and it is based on voxel location and majority decision
+4. Core function is executed: 
+  4.1 The core funtion is an intensity value lookup between the two models, and it is based on voxel location and majority decision
 
-5) A spline function, that describes the voxel intensity relation between the two models, is determined
+5. A spline function, that describes the voxel intensity relation between the two models, is determined
 
-6) A lookup table is generated on the basis of the spline function
+6. A lookup table is generated on the basis of the spline function
 
-7) One of the models is converted using minclookup and the generated lookup table
+7. One of the models is converted using minclookup and the generated lookup table
 
 The algorithm is implemented as a script in Jupyter Notebook. 
 
