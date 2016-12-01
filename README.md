@@ -32,4 +32,4 @@ The script uses external software, so for it to be executable, the following sof
 - Lasse Riis Østergaard - lasse@hst.aau.dk
 - Markus Barth - m.barth@uq.edu.au
 - Andrew Janke - a.janke@gmail.com
-- Steffen Bollmann - stebollmann@gmail.com
+- Steffen Bollmann - steffen.bollmann@cai.uq.edu.au
