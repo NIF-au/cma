@@ -1,21 +1,6 @@
 ''' module docstring '''
 # coding: utf-8
-# pylint: disable=I0011,E0401
-# ,C0103,W0612,
-# In[1]:
-
-# # libraries
-# import nibabel as nib
-# import numpy as np
-# from scipy import stats
-# from mpl_toolkits.mplot3d import Axes3D
-# import matplotlib.pyplot as plt
-
-# In[2]:
-# from __future__ import division
-# from scipy import ndimage
-# from scipy.optimize import curve_fit
-# from scipy.interpolate import UnivariateSpline
+# pylint: disable=I0011,E0401,C0103,R0914,R0915,C0200
 
 import tempfile
 import os
@@ -28,6 +13,11 @@ from scipy import ndimage
 from scipy import stats
 from scipy.interpolate import UnivariateSpline
 import matplotlib.pyplot as plt
+
+
+def run_cmd(*args):
+    ''' create '''
+    subprocess.call(args)
 
 
 class Image(object):
@@ -48,22 +38,52 @@ class Image(object):
     @classmethod
     def create(cls, self, ext, output_dir=False):
         ''' create '''
-        if not output_dir:
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        else:
             output_dir = self.dirname
         return cls(os.path.join(output_dir, self.name + ext))
 
 
-def run_cmd(*args):
-    ''' create '''
-    subprocess.call(args)
+def generate_masks(source_mnc, target_mnc, tmp_dir):
+    ''' Compilation of mask generation '''
+    source_norm_mnc = Image.create(source_mnc, '.mnc', tmp_dir)
+    target_norm_mnc = Image.create(target_mnc, '.mnc', tmp_dir)
+
+    source_nii = Image.create(source_mnc, '.nii', os.path.join(tmp_dir, 'bet'))
+    bet_nii_gz = Image.create(source_nii, '_bet.nii.gz')
+    bet_mask_nii_gz = Image.create(source_nii, '_bet_mask.nii.gz')
+    bet_mask_nii = Image.create(source_nii, '_bet_mask.nii')
+    bet_mask_mnc = Image.create(source_nii, '_bet_mask.mnc', tmp_dir)
+    source_norm_res_mnc = Image.create(source_norm_mnc, '_res.mnc')
+    bet_mask_res_mnc = Image.create(bet_mask_mnc, '_res.mnc')
+
+    run_cmd('mincnorm', source_mnc.abspath, source_norm_mnc.abspath)
+    run_cmd('mincnorm', target_mnc.abspath, target_norm_mnc.abspath)
+    run_cmd('mnc2nii', source_norm_mnc.abspath, source_nii.abspath)
+    run_cmd('bet', source_nii.abspath, bet_nii_gz.abspath,
+            '-R', '-m', '-f', '0.5', '-v')
+    run_cmd('gunzip', bet_mask_nii_gz.abspath)
+    run_cmd(
+        'nii2mnc', bet_mask_nii.abspath, bet_mask_mnc.abspath)
+    run_cmd('mincresample', '-like',
+            target_norm_mnc.abspath,
+            source_norm_mnc.abspath,
+            source_norm_res_mnc.abspath)
+    run_cmd('mincresample', '-like',
+            target_norm_mnc.abspath,
+            bet_mask_mnc.abspath,
+            bet_mask_res_mnc.abspath)
+    return source_norm_res_mnc, target_norm_mnc, bet_mask_res_mnc
 
 
-def create_temp_dir(path=os.path.join(os.getcwd(), 'tmp')):
+def create_tmp_dir(path=os.path.join(os.getcwd(), 'tmp')):
     ''' creating tmp dir. Defaults to working_dir/tmp '''
     os.makedirs(path, exist_ok=True)
-    temp_dir = tempfile.mkdtemp(dir=path)
-    # temp_dir = os.path.abspath(path)
-    return temp_dir
+    tmp_dir = tempfile.mkdtemp(dir=path)
+    print(tmp_dir)
+    # tmp_dir = os.path.abspath(path)
+    return tmp_dir
 
 
 def rescale(values, new_min=0, new_max=1):
@@ -123,46 +143,19 @@ def main():
 
     # make tmpdir
     if sys.argv[3]:
-        temp_dir = create_temp_dir(os.path.join(sys.argv[3], 'tmp'))
+        tmp_dir = create_tmp_dir(os.path.join(sys.argv[3], 'tmp'))
     else:
-        temp_dir = create_temp_dir()
+        tmp_dir = create_tmp_dir()
+
+    source_norm_res_mnc, target_norm_mnc, bet_mask_res_mnc = generate_masks(
+        Image.load(sys.argv[1]), Image.load(sys.argv[2]), tmp_dir)
 
     # MASK GENERATION
-    model_contrast1_mnc = Image.load(sys.argv[1])
-    rough_aligned_model_contrast2_mnc = Image(sys.argv[2])
-
-    contrast1_nii = Image.create(model_contrast1_mnc, '.nii', temp_dir)
-    contrast1_bet_nii_gz = Image.create(contrast1_nii, '_bet.nii.gz')
-    contrast1_bet_mask_nii_gz = Image.create(contrast1_nii, '_bet_mask.nii.gz')
-    contrast1_bet_nii = Image.create(contrast1_nii, '_bet.nii')
-    contrast1_bet_mask_nii = Image.create(contrast1_nii, '_bet_mask.nii')
-    contrast1_bet_mask_mnc = Image.create(contrast1_bet_mask_nii, '.mnc')
-    contrast1_resampled2contrast2_mnc = Image.create(
-        model_contrast1_mnc, '_resampled2contrast2.mnc', temp_dir)
-    contrast1_bet_mask_resampled2contrast2_mnc = Image.create(
-        contrast1_bet_mask_mnc, '_resampled2contrast2.mnc')
-
-    run_cmd('mnc2nii', model_contrast1_mnc.abspath, contrast1_nii.abspath)
-    run_cmd('bet', contrast1_nii.abspath, contrast1_bet_nii.abspath,
-            '-R', '-m', '-f', '0.5', '-v')
-    run_cmd('gunzip', contrast1_bet_nii_gz.abspath)
-    run_cmd('gunzip', contrast1_bet_mask_nii_gz.abspath)
-    run_cmd('nii2mnc', contrast1_bet_mask_nii.abspath,
-            contrast1_bet_mask_mnc.abspath)
-    run_cmd('mincresample', '-like',
-            rough_aligned_model_contrast2_mnc.abspath,
-            model_contrast1_mnc.abspath,
-            contrast1_resampled2contrast2_mnc.abspath)
-    run_cmd('mincresample', '-like',
-            rough_aligned_model_contrast2_mnc.abspath,
-            contrast1_bet_mask_mnc.abspath,
-            contrast1_bet_mask_resampled2contrast2_mnc.abspath)
-
     arr1d_contrast1, contrast2_uint32, contrast2_unique_zero, \
         contrast2_unique_rescaled_fl64 = arr_preprocessing(
-            contrast1_bet_mask_resampled2contrast2_mnc,
-            contrast1_resampled2contrast2_mnc,
-            rough_aligned_model_contrast2_mnc)
+            bet_mask_res_mnc,
+            source_norm_res_mnc,
+            target_norm_mnc)
 
     # allocating some space
     target_val = np.array([])
