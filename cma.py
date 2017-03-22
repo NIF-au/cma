@@ -13,6 +13,7 @@ from scipy import ndimage
 from scipy import stats
 from scipy.interpolate import UnivariateSpline
 import matplotlib.pyplot as plt
+# import code # code.interact(local=locals())
 
 
 def run_cmd(*args):
@@ -58,8 +59,8 @@ def generate_masks(source_mnc, target_mnc, tmp_dir):
     source_norm_res_mnc = Image.create(source_norm_mnc, '_res.mnc')
     bet_mask_res_mnc = Image.create(bet_mask_mnc, '_res.mnc')
 
-    run_cmd('mincnorm', source_mnc.abspath, source_norm_mnc.abspath)
-    run_cmd('mincnorm', target_mnc.abspath, target_norm_mnc.abspath)
+    run_cmd('cp', source_mnc.abspath, source_norm_mnc.abspath)
+    run_cmd('cp', target_mnc.abspath, target_norm_mnc.abspath)
     run_cmd('mnc2nii', source_norm_mnc.abspath, source_nii.abspath)
     run_cmd('bet', source_nii.abspath, bet_nii_gz.abspath,
             '-R', '-m', '-f', '0.5', '-v')
@@ -81,7 +82,6 @@ def create_tmp_dir(path=os.path.join(os.getcwd(), 'tmp')):
     ''' creating tmp dir. Defaults to working_dir/tmp '''
     os.makedirs(path, exist_ok=True)
     tmp_dir = tempfile.mkdtemp(dir=path)
-    print(tmp_dir)
     # tmp_dir = os.path.abspath(path)
     return tmp_dir
 
@@ -147,8 +147,11 @@ def main():
     else:
         tmp_dir = create_tmp_dir()
 
+    source_mnc = Image.load(sys.argv[1])
+    target_mnc = Image.load(sys.argv[2])
+
     source_norm_res_mnc, target_norm_mnc, bet_mask_res_mnc = generate_masks(
-        Image.load(sys.argv[1]), Image.load(sys.argv[2]), tmp_dir)
+        source_mnc, target_mnc, tmp_dir)
 
     # MASK GENERATION
     arr1d_contrast1, contrast2_uint32, contrast2_unique_zero, \
@@ -220,13 +223,13 @@ def main():
         lut.write(firstLutColumn_str + " " + secondLutColumn_str + "\n")
     lut.close()
 
-    model_contrast2_lookupConverted2contrast1_mnc = Image.create(
-        rough_aligned_model_contrast2_mnc, '_lookupConverted2contrast1.mnc')
+    target_lookup_mnc = Image.create(
+        target_mnc, '_lookup.mnc')
 
     run_cmd(
         'minclookup', '-continuous', '-lookup_table', 'lookuptable.txt',
-        rough_aligned_model_contrast2_mnc.abspath,
-        model_contrast2_lookupConverted2contrast1_mnc.abspath, '-2')
+        target_mnc.abspath,
+        target_lookup_mnc.abspath, '-2')
 
 if __name__ == '__main__':
     main()
