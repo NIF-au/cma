@@ -1,270 +1,282 @@
+''' Contrast Matching Algorithm (CMA).
 
-# coding: utf-8
+This algorithm takes two MRI models of different contrast as input
+, matches the contrast of one model to that of the other
+, and returns a contrast-matched model.
+The algorithm thereby enables non-linear coregistration
+using cross correlation of multi-modal minimum deformation averaged MRI models.
 
-# In[1]:
+[Usage]
+python3 cma.py <dir/target.mnc> <dir/source.mnc> <optional:working_dir>
 
-# libraries 
+target.mnc:
+source.mnc:
+working_dir: tmp folder will be created here. Defaults to current_dir/tmp
+
+[Requirements]
+python3, mincnorm, mnc2nii, nii2mnc, bet, mincresample, gunzip
+
+'''
+
+# Libraries
+import time
+import datetime
+import tempfile
+import os
+import subprocess
+import sys
+import shutil
 import nibabel as nib
 import numpy as np
-from scipy import stats
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-from scipy.interpolate import UnivariateSpline
-from __future__ import division
-import sys
-import subprocess, shlex
 from scipy import ndimage
+from scipy import stats
+from scipy.interpolate import UnivariateSpline
+import matplotlib.pyplot as plt
 
 
-# In[2]:
+def main():
 
-# definitions
-def tic():
-    #Homemade version of matlab tic and toc functions
-    import time
-    global startTime_for_tictoc
-    startTime_for_tictoc = time.time()
+    ''' main '''
+    print('=' * 79)
+    print('Contrast Matching Algorithm (CMA)')
+    print('=' * 79)
 
-def toc():
-    import time
-    if 'startTime_for_tictoc' in globals():
-        print("Elapsed time is " + str(time.time() - startTime_for_tictoc) + " seconds.")
+    if sys.argv[3]:
+        tmp_dir = create_tmp_dir(sys.argv[3])
     else:
-        print("Toc: start time not set")
+        tmp_dir = create_tmp_dir()
+    step('Created temp dir at', tmp_dir)
 
-def rescale(values, new_min = 0, new_max = 1):
+    target_mnc = Filepath.load(sys.argv[1])
+    step('Input', target_mnc.abspath)
+    source_mnc = Filepath.load(sys.argv[2])
+    step('input', source_mnc.abspath)
+
+    target_norm_res_mnc, source_norm_mnc, bet_mask_res_mnc = generate_masks(
+        target_mnc, source_mnc, tmp_dir)
+
+    arr1d_contrast1, contrast2_uint32, contrast2_unique_zero, \
+        contrast2_unique_rescaled_fl64 = arr_preprocessing(
+            bet_mask_res_mnc,
+            target_norm_res_mnc,
+            source_norm_mnc)
+
+    # allocating some space
+    source_val = np.array([])
+    val_match_contrast1 = np.array([])
+    len_contrast2_unique = len(contrast2_unique_zero)
+
+    # CORE FUNCTION: VOXEL INTENSITY LOOKUP
+
+    final_val_match = np.array([])
+    for i in range(len_contrast2_unique):
+        source_val = contrast2_unique_zero[i]
+        val_match_contrast1 = arr1d_contrast1[
+            np.where(contrast2_uint32 == source_val)]
+
+        # decreasing size of val_match_contrast1 by only
+        # (1) including positive values and
+        # (2) taking every 15th element
+        array_np = np.asarray(val_match_contrast1)
+        positive_val_match_contrast1 = array_np > 0
+        decreased_val_match_contrast1 = array_np[positive_val_match_contrast1]
+        decreased_nth_val_match_contrast1 = decreased_val_match_contrast1[
+            ::15].copy()
+
+        # a list that contains the matched values and their frequencies
+        Blist = stats.itemfreq(decreased_nth_val_match_contrast1).tolist()
+
+        # finding the values with the highest frequency
+        max_count = max(Blist, key=lambda x: x[1])
+        max_val_list = [x for x in Blist if x[1] == max_count[1]]
+        max_vals = [l[0] for l in max_val_list]
+        mean_val = np.mean(max_vals)
+        final_val_match = np.append(final_val_match, mean_val)
+
+    step('Core function: matched intensities')
+    # data type conversion and rescaling of contrast 2
+
+    x = contrast2_unique_rescaled_fl64
+    y = final_val_match
+    plt.plot(x, y, '.')
+
+    # creating the spline and adjusting the amount of smoothing
+    spl = UnivariateSpline(x, y)
+    spl.set_smoothing_factor(400)
+
+    x_converted = spl(x)
+    plt.plot(x, x_converted, 'g', lw=1)
+    plt.xlabel('Intensity values of contrast 2')
+    plt.ylabel('Intensity values of contrast 1')
+    intensity_plot = Filepath.create(source_mnc, '_intensity.png')
+    plt.savefig(intensity_plot.abspath)
+    step('Spline fit. Saved to', intensity_plot.abspath)
+
+    firstLutColumn = x
+    secondLutColumn = x_converted
+
+    # rescaling of intensity values to the range 0-1
+    firstLutColumn = rescale(firstLutColumn, 0, 1)
+    secondLutColumn = rescale(secondLutColumn, 0, 1)
+
+    # saving lookup table (lut) as .txt
+    lut = open(os.path.join(tmp_dir, 'lookuptable.txt'), "w")
+    for j in range(len(firstLutColumn)):
+        firstLutColumn_str = str(firstLutColumn[j])
+        secondLutColumn_str = str(secondLutColumn[j])
+        lut.write(firstLutColumn_str + " " + secondLutColumn_str + "\n")
+    lut.close()
+    step('Loopkup table generated. Saved to', )
+
+    source_lookup_mnc = Filepath.create(
+        source_mnc, '_lookup.mnc')
+
+    run_cmd(
+        'minclookup', '-continuous', '-lookup_table',
+        os.path.join(tmp_dir, 'lookuptable.txt'),
+        source_mnc.abspath,
+        source_lookup_mnc.abspath, '-2')
+    print('=' * 79)
+
+
+def step(*args):
+    ''' Prints steps '''
+    status = '[' + str(datetime.datetime.now()) + '][Complete] '
+    print(status + ' '.join(args))
+
+
+def run_cmd(*args):
+    ''' Runs shell command '''
+    subprocess.call(args)
+    step(' '.join(args))
+
+
+class Filepath(object):
+    ''' Handles file paths '''
+    def __init__(self, input_file):
+        self.abspath = os.path.abspath(input_file)
+        (self.dirname, self.filename) = os.path.split(self.abspath)
+        (self.root, self.ext) = os.path.splitext(self.abspath)
+        (self.name, _) = os.path.splitext(self.filename)
+
+    @classmethod
+    def load(cls, input_file, output_dir=False):
+        ''' Load path for existing file '''
+        if output_dir:
+            input_file = shutil.copy2(input_file, output_dir)
+        return cls(input_file)
+
+    @classmethod
+    def create(cls, self, ext, output_dir=False):
+        ''' Create path for new file '''
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        else:
+            output_dir = self.dirname
+        output_file = os.path.join(output_dir, self.name + ext)
+        return cls(output_file)
+
+    def exist(self):
+        ''' Does this file exist '''
+        return os.path.lexists(self.abspath)
+
+
+def generate_masks(target_mnc, source_mnc, tmp_dir):
+    ''' Normalisation, Mask Generation and Resampling '''
+    target_norm_mnc = Filepath.create(target_mnc, '_norm.mnc', tmp_dir)
+    source_norm_mnc = Filepath.create(source_mnc, '_norm.mnc', tmp_dir)
+
+    target_nii = Filepath.create(
+        target_mnc, '.nii', os.path.join(tmp_dir, 'bet'))
+    bet_nii = Filepath.create(target_nii, '_bet.nii')
+    bet_mask_nii = Filepath.create(target_nii, '_bet_mask.nii')
+    bet_mask_mnc = Filepath.create(target_nii, '_bet_mask.mnc', tmp_dir)
+    target_norm_res_mnc = Filepath.create(target_norm_mnc, '_res.mnc')
+    bet_mask_res_mnc = Filepath.create(bet_mask_mnc, '_res.mnc')
+
+    run_cmd('mincnorm', target_mnc.abspath, target_norm_mnc.abspath)
+    run_cmd('mincnorm', source_mnc.abspath, source_norm_mnc.abspath)
+    run_cmd('mnc2nii', target_norm_mnc.abspath, target_nii.abspath)
+    run_cmd('bet', target_nii.abspath, bet_nii.abspath,
+            '-R', '-m', '-f', '0.5', '-v')
+    if not bet_mask_nii.exist():
+        bet_mask_nii_gz = Filepath.create(target_nii, '_bet_mask.nii.gz')
+        run_cmd('gunzip', bet_mask_nii_gz.abspath)
+    run_cmd(
+        'nii2mnc', bet_mask_nii.abspath, bet_mask_mnc.abspath)
+    run_cmd('mincresample', '-like',
+            source_norm_mnc.abspath,
+            target_norm_mnc.abspath,
+            target_norm_res_mnc.abspath)
+    run_cmd('mincresample', '-like',
+            source_norm_mnc.abspath,
+            bet_mask_mnc.abspath,
+            bet_mask_res_mnc.abspath)
+    return target_norm_res_mnc, source_norm_mnc, bet_mask_res_mnc
+
+
+def create_tmp_dir(path=os.path.join(os.getcwd(), 'tmp')):
+    ''' Creates tmp dir. Defaults to current_dir/tmp '''
+    os.makedirs(path, exist_ok=True)
+    tmp_dir = tempfile.mkdtemp(dir=path)
+    # tmp_dir = os.path.abspath(path)
+    return tmp_dir
+
+
+def rescale(values, new_min=0, new_max=1):
+    ''' Rescale algorithm '''
     output = []
     old_min, old_max = min(values), max(values)
-    for v in values:
-        new_v = (new_max - new_min) / (old_max - old_min) * (v - old_min) + new_min
-        output.append(new_v)
+    for val in values:
+        new_val = (new_max - new_min) / (old_max - old_min) * (val - old_min) \
+            + new_min
+        output.append(new_val)
     return output
 
 
-# In[3]:
-
-# MASK GENERATION 
-
-
-# In[ ]:
-
-# format-conversion mnc2nii 
-input_im = "/.../model_contrast1.mnc" # insert path to MRI model with contrast 1, to which the other model's contrast (contrast 2) is matched to
-output_im = "/.../contrast1.nii"
-shell_cmd = "mnc2nii" + " " + input_im + " " + output_im 
-args = shlex.split(shell_cmd)
-p = subprocess.Popen(args) 
-
-# bet
-input_im = "/.../contrast1.nii"
-output_im = "/.../contrast1_bet.nii"
-shell_cmd = "bet" + " " + input_im + " " + output_im + " " + "-R -m -f 0.5 -v"
-args = shlex.split(shell_cmd)
-p = subprocess.Popen(args) 
-
-# format-conversion nii2mnc 
-input_im = "/.../contrast1_bet_mask.nii"
-output_im = "/.../contrast1_bet_mask.mnc"
-shell_cmd = "nii2mnc" + " " + input_im + " " + output_im
-args = shlex.split(shell_cmd)
-p = subprocess.Popen(args) 
-
-
-# In[ ]:
-
-# RESAMPLING 
-
-
-# In[ ]:
-
-# resample one model to the other
-resampleToModel = "/.../rough_aligned_model_contrast2.mnc" # insert path to MRI model with contrast 2, which is roughly aligned to model with contrast 1
-input_im = "/.../model_contrast1.mnc"
-output_im = "/.../contrast1_resampled2contrast2.mnc"
-shell_cmd = "mincresample -like" + " " + resampleToModel + " " + input_im + " " + output_im
-args = shlex.split(shell_cmd)
-p = subprocess.Popen(args) 
-
-# resampling of mask
-input_im = "/.../contrast1_bet_mask.mnc"
-output_im = "/.../contrast1_bet_mask_resampled2contrast2.mnc"
-shell_cmd = "mincresample -like" + " " + resampleToModel + " " + input_im + " " + output_im
-args = shlex.split(shell_cmd)
-p = subprocess.Popen(args) 
-
-
-# In[ ]:
-
-# LOADING AND BLURRING OF MODEL WITH CONTRAST 1 
-
-
-# In[14]:
-
-# load models
-contrast1 = nib.load('/.../contrast1_resampled2contrast2.mnc')
-contrast2 = nib.load('/.../rough_aligned_model_contrast2.mnc')
-
-# load mask
-mask = nib.load('/.../contrast1_bet_mask_resampled2contrast2.mnc')
-
-# get image data 
-contrast1Data = contrast1.get_data()
-contrast2Data = contrast2.get_data()
-maskData = mask.get_data()
-
-# convert to numpy array
-arr_contrast1 = np.array(contrast1Data)
-arr_contrast2 = np.array(contrast2Data)
-arr_mask = np.array(maskData)
-
-# apply (resampled) mask to both models  
-contrast1_masked = arr_contrast1 * arr_mask
-contrast2_masked = arr_contrast2 * arr_mask
-
-# smooth model with contrast 1 (the contrast to which the other model's contrast will be matched to) 
-contrast1_masked_smoothed = ndimage.uniform_filter(contrast1_masked, size=[9, 9, 9])
-
-
-# In[ ]:
-
-# PREPROCESSING
-
-
-# In[19]:
-
-# convert from 3D to 1D
-reshape_size_contrast1 = contrast1_masked_smoothed.size
-reshape_size_contrast2 = contrast2_masked.size
-
-arr1D_contrast1 = np.reshape(contrast1_masked_smoothed.data, reshape_size_contrast1)
-arr1D_contrast2 = np.reshape(contrast2_masked.data, reshape_size_contrast2)
-
-# max val 
-max_contrast1 = np.amax(arr1D_contrast1)
-max_contrast2 = np.amax(arr1D_contrast2)
-max_val = 300.0
-
-# scaling   
-scaleFactor_1 = max_val / max_contrast1
-arr1D_contrast1_scaled = arr1D_contrast1 * scaleFactor_1
- 
-scaleFactor_2 = max_val / max_contrast2
-arr1D_contrast2_scaled = arr1D_contrast2 * scaleFactor_2
-
-# convert data type (float64 --> uint32)
-contrast1_uint32 = np.uint32(arr1D_contrast1_scaled)
-contrast2_uint32 = np.uint32(arr1D_contrast2_scaled)
-
-# unique val and indeces of contrast 2 
-unique, indeces = np.unique(contrast2_uint32, return_index=True)
-
-# only picking out unique val 
-contrast2_unique = contrast2_uint32[indeces]
-
-# only including unique values above 0 
-M = np.where(contrast2_unique > 0)
-contrast2_unique_zero = contrast2_unique[M] 
-
-# allocating some space 
-targetVal = np.array([])
-logicMatch = np.array([])
-valMatch_contrast1 = np.array([])
-len_contrast2_unique = len(contrast2_unique_zero)
-
-
-# In[20]:
-
-# CORE FUNCTION: VOXEL INTENSITY LOOKUP
-
-
-# In[ ]:
-
-finalValMatch = np.array([])
-for i in range(len_contrast2_unique):
-    targetVal = contrast2_unique_zero[i]
-    L = np.where(contrast2_uint32 == targetVal)
-    valMatch_contrast1 = arr1D_contrast1[L]
-    
-    # decreasing size of valMatch_contrast1 by only 
-    # (1) including positive values and 
-    # (2) taking every 15th element
-    array_np = np.asarray(valMatch_contrast1)
-    positive_valMatch_contrast1 = array_np > 0 
-    decreased_valMatch_contrast1 = array_np[positive_valMatch_contrast1]     
-    decreased_nth_valMatch_contrast1 = decreased_valMatch_contrast1[::15].copy()     
-    
-    # a list that contains the matched values and their frequencies
-    Blist = stats.itemfreq(decreased_nth_valMatch_contrast1).tolist()
-    
-    # finding the values with the highest frequency 
-    max_count = max(Blist, key=lambda x: x[1])
-    max_val_list = [x for x in Blist if x[1] == max_count[1]]
-    max_vals = [l[0] for l in max_val_list]
-    mean_val = np.mean(max_vals)
-    finalValMatch = np.append(finalValMatch, mean_val)
-    
-# data type conversion and rescaling of contrast 2
-contrast2_unique_fl64 = np.float64(contrast2_unique_zero) 
-contrast2_unique_rescaled_fl64 = contrast2_unique_fl64 / scaleFactor_2
-
-
-# In[26]:
-
-# SPLINE FITTING
-
-
-# In[ ]:
-
-x = contrast2_unique_rescaled_fl64 # intensities of contrast 2
-y = finalValMatch # matching intensities of contrast 1
-plt.plot(x, y, '.') 
-
-# creating the spline and adjusting the amount of smoothing
-spl = UnivariateSpline(x, y)
-spl.set_smoothing_factor(400)
-
-x_converted = spl(x)
-plt.plot(x, x_converted, 'g', lw=1) 
-plt.xlabel('Intensity values of contrast 2')
-plt.ylabel('Intensity values of contrast 1')
-plt.show()
-
-
-# In[ ]:
-
-# LOOKUP TABLE GENERATION
-
-
-# In[33]:
-
-firstLutColumn = x
-secondLutColumn = x_converted
-
-# rescaling of intensity values to the range 0-1
-firstLutColumn = rescale(firstLutColumn, 0, 1)
-secondLutColumn = rescale(secondLutColumn, 0, 1)
-
-# saving lookup table (lut) as .txt
-lut = open("lookuptable.txt","w")
-for j in range(len(firstLutColumn)):
-    firstLutColumn_str = str(firstLutColumn[j])
-    secondLutColumn_str = str(secondLutColumn[j])
-    lut.write(firstLutColumn_str + " " + secondLutColumn_str + "\n")
-lut.close()
-
-
-# In[35]:
-
-# CONVERSION OF MODEL WITH CONTRAST 2 USING LOOKUP TABLE
-
-
-# In[ ]:
-
-lut = "/.../lookuptable.txt"
-input_im = "/.../rough_aligned_model_contrast2.mnc"
-output_im = "/.../model_contrast2_lookupConverted2contrast1.mnc"
-shell_cmd = "minclookup -continuous -lookup_table" + " " + lut + " " + input_im + " " + output_im + " " + "-2"
-args = shlex.split(shell_cmd)
-p = subprocess.Popen(args)
-
+def arr_image(input_im):
+    ''' Convert image to numpy array '''
+    image = nib.load(input_im.abspath)
+    image_data = image.get_data()
+    step('Loaded into array', input_im.abspath)
+    return np.array(image_data)
+
+
+def arr_preprocessing(img_mask, img1, img2):
+    ''' Applying mask, smoothing model, intensity lookup '''
+    max_val = 300.0
+    arr_mask = arr_image(img_mask)
+    contrast1_masked = np.multiply(arr_image(img1), arr_mask)
+    contrast2_masked = np.multiply(arr_image(img2), arr_mask)
+
+    contrast1_masked_smoothed = ndimage.uniform_filter(
+        contrast1_masked, size=[9, 9, 9])
+    step('Smoothing of model with contrast 1')
+
+    # INTENSITY LOOKUP
+    reshape_size_contrast1 = contrast1_masked_smoothed.size
+    reshape_size_contrast2 = contrast2_masked.size
+
+    arr1d_contrast1 = np.reshape(
+        contrast1_masked_smoothed.data, reshape_size_contrast1)
+    arr1d_contrast2 = np.reshape(contrast2_masked.data, reshape_size_contrast2)
+    step('Converted from 3D to 1D')
+
+    contrast2_uint32 = np.uint32(
+        arr1d_contrast2 * (max_val / np.amax(arr1d_contrast2)))
+    step('convert data type from float64 to uint32')
+
+    _, indeces = np.unique(contrast2_uint32, return_index=True)
+    contrast2_unique = contrast2_uint32[indeces]
+    contrast2_unique_zero = contrast2_unique[np.where(contrast2_unique > 0)]
+    contrast2_unique_fl64 = np.float64(contrast2_unique_zero)
+    contrast2_unique_rescaled_fl64 = contrast2_unique_fl64/(
+        max_val/np.amax(arr1d_contrast2))
+    step('Picked unique value above 0')
+
+    return arr1d_contrast1, contrast2_uint32, contrast2_unique_zero, \
+        contrast2_unique_rescaled_fl64
+
+
+if __name__ == '__main__':
+    main()
