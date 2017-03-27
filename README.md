@@ -34,4 +34,5 @@ The script uses external software, so for it to be executable, the following sof
 - David Reutens 
 - Markus Barth
 - Andrew Janke
+- Aswin Narayanan
 - Steffen Bollmann
