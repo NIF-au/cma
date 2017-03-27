@@ -26,10 +26,13 @@ The script uses external software, so for it to be executable, the following sof
 
 ## Team Members
 
-- Julie Broni Munk - julie-munk@hotmail.com
-- Nina Jacobsen - nina_1992_27@hotmail.com
-- Maciej Plocharski - mpl@hst.aau.dk  
-- Lasse Riis Østergaard - lasse@hst.aau.dk
-- Markus Barth - m.barth@uq.edu.au
-- Andrew Janke - a.janke@gmail.com
-- Steffen Bollmann - steffen.bollmann@cai.uq.edu.au
+- Julie Broni Munk
+- Nina Jacobsen
+- Maciej Plocharski
+- Lasse Riis Østergaard
+- Lars Marstaller
+- David Reutens 
+- Markus Barth
+- Andrew Janke
+- Aswin Narayanan
+- Steffen Bollmann
