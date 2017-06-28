@@ -4,13 +4,13 @@ This algorithm takes two MRI models of different contrast as input, matches the 
 
 For the algorithm to be successful, the two models must initially be roughly aligned.
 
-The algorithm can be briefly be described as a 7-step procedure:
+The algorithm contains the following steps: 
 
-  1. A mask, generated using BET2, is applied to both models
+  1. The intensity range of both models is normalised to be between 0-100
+  2. A mask, generated using BET2, is applied to both models
   2. The model with the contrast, to which the other model is matched to, is blurred
-  3. Both models are preprocessed in preparation for the core function
-  4. Core function is executed: 
-      1. The core funtion is an intensity value lookup between the two models, and it is based on voxel location and majority decision
+  3. Both models are preprocessed in preparation for the lookup 
+  4. A voxel intensity value lookup between the two models, based on voxel location and majority decision, is performed
   5. A spline function, that describes the voxel intensity relation between the two models, is determined
   6. A lookup table is generated on the basis of the spline function
   7. One of the models is converted using minclookup and the generated lookup table
@@ -26,10 +26,13 @@ The script uses external software, so for it to be executable, the following sof
 
 ## Team Members
 
-- Julie Broni Munk - julie-munk@hotmail.com
-- Nina Jacobsen - nina_1992_27@hotmail.com
-- Maciej Plocharski - mpl@hst.aau.dk  
-- Lasse Riis Østergaard - lasse@hst.aau.dk
-- Markus Barth - m.barth@uq.edu.au
-- Andrew Janke - a.janke@gmail.com
-- Steffen Bollmann - stebollmann@gmail.com
+- Julie Broni Munk
+- Nina Jacobsen
+- Maciej Plocharski
+- Lasse Riis Østergaard
+- Lars Marstaller
+- David Reutens 
+- Markus Barth
+- Andrew Janke
+- Aswin Narayanan
+- Steffen Bollmann
