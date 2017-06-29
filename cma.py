@@ -1,4 +1,4 @@
-''' Contrast Matching Algorithm (CMA).
+""" Contrast Matching Algorithm (CMA).
 
 This algorithm takes two MRI models of different contrast as input
 , matches the contrast of one model to that of the other
@@ -16,50 +16,64 @@ working_dir: tmp folder will be created here. Defaults to current_dir/tmp
 [Requirements]
 python3, mincnorm, mnc2nii, nii2mnc, bet, mincresample, gunzip
 
-'''
+"""
 
 # Libraries
-import time
-import datetime
-import tempfile
-import os
-import subprocess
 import sys
 import shutil
+import argparse
 import nibabel as nib
 import numpy as np
 from scipy import ndimage
 from scipy import stats
 from scipy.interpolate import UnivariateSpline
 import matplotlib.pyplot as plt
+import pathlib
+from helpers import create_tmpdir
+from helpers import step
+from helpers import do_cmd
+import datetime
+import re
+
+
+def get_args(args):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--target', help='the target contrast', required=True)
+    parser.add_argument('--source', help='the source contrast', required=True)
+    parser.add_argument('--tmpdir', help='temporary directory', required=True)
+    parser.add_argument('--bet', help='bet/bet2/auto, default auto',
+                        default='auto')
+    parser.add_argument('--maxval', help='max val, default 300', default=300.0)
+    myargs = parser.parse_args(args)
+    return myargs
 
 
 def main():
 
     ''' main '''
+    print('\n')
     print('=' * 79)
     print('Contrast Matching Algorithm (CMA)')
     print('=' * 79)
+    print(str(datetime.datetime.now().strftime('[%H:%M:%S] [%Y-%m-%d]')))
 
-    if sys.argv[3]:
-        tmp_dir = create_tmp_dir(sys.argv[3])
-    else:
-        tmp_dir = create_tmp_dir()
-    step('Created temp dir at', tmp_dir)
+    myargs = get_args(sys.argv[1:])
+    tmpdir = create_tmpdir(pathlib.Path(myargs.tmpdir))
 
-    target_mnc = Filepath.load(sys.argv[1])
-    step('Input', target_mnc.abspath)
-    source_mnc = Filepath.load(sys.argv[2])
-    step('input', source_mnc.abspath)
+    step('Created temp dir at', tmpdir)
+
+    target_mnc = pathlib.Path(myargs.target)
+    step('Input Target Contrast', target_mnc)
+    source_mnc = pathlib.Path(myargs.source)
+    step('Input Source Contrast', source_mnc)
 
     target_norm_res_mnc, source_norm_mnc, bet_mask_res_mnc = generate_masks(
-        target_mnc, source_mnc, tmp_dir)
+        target_mnc, source_mnc, tmpdir, myargs)
 
     arr1d_contrast1, contrast2_uint32, contrast2_unique_zero, \
-        contrast2_unique_rescaled_fl64 = arr_preprocessing(
-            bet_mask_res_mnc,
-            target_norm_res_mnc,
-            source_norm_mnc)
+    contrast2_unique_rescaled_fl64 = arr_preprocessing(
+        bet_mask_res_mnc, target_norm_res_mnc, source_norm_mnc,
+        float(myargs.maxval))
 
     # allocating some space
     source_val = np.array([])
@@ -105,12 +119,13 @@ def main():
     spl.set_smoothing_factor(400)
 
     x_converted = spl(x)
-    plt.plot(x, x_converted, 'g', lw=1)
+    # plt.plot(x, x_converted, 'g', lw=1)
     plt.xlabel('Intensity values of contrast 2')
     plt.ylabel('Intensity values of contrast 1')
-    intensity_plot = Filepath.create(source_mnc, '_intensity.png')
-    plt.savefig(intensity_plot.abspath)
-    step('Spline fit. Saved to', intensity_plot.abspath)
+
+    intensity_plot = source_mnc.with_name(source_mnc.stem + '_intensity.png')
+    plt.savefig(str(intensity_plot))
+    step('Spline fit. Saved to', intensity_plot)
 
     firstLutColumn = x
     secondLutColumn = x_converted
@@ -120,7 +135,7 @@ def main():
     secondLutColumn = rescale(secondLutColumn, 0, 1)
 
     # saving lookup table (lut) as .txt
-    lut = open(os.path.join(tmp_dir, 'lookuptable.txt'), "w")
+    lut = open(str(tmpdir / 'lookuptable.txt'), "w")
     for j in range(len(firstLutColumn)):
         firstLutColumn_str = str(firstLutColumn[j])
         secondLutColumn_str = str(secondLutColumn[j])
@@ -128,99 +143,77 @@ def main():
     lut.close()
     step('Loopkup table generated. Saved to', )
 
-    source_lookup_mnc = Filepath.create(
-        source_mnc, '_lookup.mnc')
+    source_lookup_mnc = source_mnc.with_name(source_mnc.stem + '_lookup.mnc')
 
-    run_cmd(
-        'minclookup', '-continuous', '-lookup_table',
-        os.path.join(tmp_dir, 'lookuptable.txt'),
-        source_mnc.abspath,
-        source_lookup_mnc.abspath, '-2')
+    do_cmd('minclookup', '-continuous', '-lookup_table',
+           tmpdir/'lookuptable.txt', source_mnc, source_lookup_mnc, '-2')
     print('=' * 79)
 
 
-def step(*args):
-    ''' Prints steps '''
-    status = '[' + str(datetime.datetime.now()) + '][Complete] '
-    print(status + ' '.join(args))
+def get_dimension(img):
+    imginfo, _ = do_cmd('mincinfo', img)
+    imginfo = imginfo.decode('utf-8')
+    dim = 0
+    if re.compile('xspace').search(imginfo):
+        dim += 1
+    if re.compile('yspace').search(imginfo):
+        dim += 1
+    if re.compile('zspace').search(imginfo):
+        dim += 1
+    return dim
 
 
-def run_cmd(*args):
-    ''' Runs shell command '''
-    subprocess.call(args)
-    step(' '.join(args))
-
-
-class Filepath(object):
-    ''' Handles file paths '''
-    def __init__(self, input_file):
-        self.abspath = os.path.abspath(input_file)
-        (self.dirname, self.filename) = os.path.split(self.abspath)
-        (self.root, self.ext) = os.path.splitext(self.abspath)
-        (self.name, _) = os.path.splitext(self.filename)
-
-    @classmethod
-    def load(cls, input_file, output_dir=False):
-        ''' Load path for existing file '''
-        if output_dir:
-            input_file = shutil.copy2(input_file, output_dir)
-        return cls(input_file)
-
-    @classmethod
-    def create(cls, self, ext, output_dir=False):
-        ''' Create path for new file '''
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-        else:
-            output_dir = self.dirname
-        output_file = os.path.join(output_dir, self.name + ext)
-        return cls(output_file)
-
-    def exist(self):
-        ''' Does this file exist '''
-        return os.path.lexists(self.abspath)
-
-
-def generate_masks(target_mnc, source_mnc, tmp_dir):
+def generate_masks(target_mnc, source_mnc, tmpdir, myargs):
     ''' Normalisation, Mask Generation and Resampling '''
-    target_norm_mnc = Filepath.create(target_mnc, '_norm.mnc', tmp_dir)
-    source_norm_mnc = Filepath.create(source_mnc, '_norm.mnc', tmp_dir)
+    betdir = tmpdir/'bet'
+    if not betdir.exists():
+        betdir.mkdir()
 
-    target_nii = Filepath.create(
-        target_mnc, '.nii', os.path.join(tmp_dir, 'bet'))
-    bet_nii = Filepath.create(target_nii, '_bet.nii')
-    bet_mask_nii = Filepath.create(target_nii, '_bet_mask.nii')
-    bet_mask_mnc = Filepath.create(target_nii, '_bet_mask.mnc', tmp_dir)
-    target_norm_res_mnc = Filepath.create(target_norm_mnc, '_res.mnc')
-    bet_mask_res_mnc = Filepath.create(bet_mask_mnc, '_res.mnc')
+    target_norm_mnc = tmpdir/(target_mnc.stem + '_norm.mnc')
+    source_norm_mnc = tmpdir/(source_mnc.stem + '_norm.mnc')
+    target_nii = betdir/(target_mnc.stem + '.nii')
+    target_norm_res_mnc = tmpdir/(target_norm_mnc.stem + '_res.mnc')
+    bet_mask_nii_gz = betdir/(target_nii.stem + '_mask.nii.gz')
+    bet_mask_nii = betdir/(target_nii.stem + '_mask.nii')
+    bet_mask_mnc = betdir/(target_nii.stem + '_mask.mnc')
+    bet_mask_res_mnc = betdir/(bet_mask_mnc.stem + '_res.mnc')
 
-    run_cmd('mincnorm', target_mnc.abspath, target_norm_mnc.abspath)
-    run_cmd('mincnorm', source_mnc.abspath, source_norm_mnc.abspath)
-    run_cmd('mnc2nii', target_norm_mnc.abspath, target_nii.abspath)
-    run_cmd('bet', target_nii.abspath, bet_nii.abspath,
-            '-R', '-m', '-f', '0.5', '-v')
-    if not bet_mask_nii.exist():
-        bet_mask_nii_gz = Filepath.create(target_nii, '_bet_mask.nii.gz')
-        run_cmd('gunzip', bet_mask_nii_gz.abspath)
-    run_cmd(
-        'nii2mnc', bet_mask_nii.abspath, bet_mask_mnc.abspath)
-    run_cmd('mincresample', '-like',
-            source_norm_mnc.abspath,
-            target_norm_mnc.abspath,
-            target_norm_res_mnc.abspath)
-    run_cmd('mincresample', '-like',
-            source_norm_mnc.abspath,
-            bet_mask_mnc.abspath,
-            bet_mask_res_mnc.abspath)
+    if get_dimension(source_mnc) == get_dimension(target_mnc):
+        step('Source and target have matching dimensions')
+    else:
+        step('[Error] Dimension mismatch, terminating')
+
+    do_cmd('mincnorm', target_mnc, target_norm_mnc)
+    do_cmd('mincnorm', source_mnc, source_norm_mnc)
+    do_cmd('mnc2nii', target_norm_mnc, target_nii)
+
+    if myargs.bet == 'auto' and shutil.which('bet2'):
+        bet = 'bet2'
+    elif myargs.bet == 'auto' and shutil.which('bet'):
+        bet = 'bet'
+    elif myargs.bet == 'bet2':
+        bet = 'bet2'
+    elif myargs.bet == 'bet':
+        bet = 'bet'
+    else:
+        step('bet/bet2 not found, terminating')
+        quit()
+
+    if bet == 'bet2':
+        do_cmd('bet2', target_nii, betdir / target_nii.stem,
+               '-m', '-f', '0.5', '-v')
+    elif bet == 'bet':
+        do_cmd('bet', target_nii, betdir / target_nii.stem,
+               '-R', '-m', '-f', '0.5', '-v')
+
+    if bet_mask_nii_gz.exists():
+        do_cmd('gunzip', bet_mask_nii_gz)
+    do_cmd('nii2mnc', bet_mask_nii, bet_mask_mnc)
+    do_cmd('mincresample', '-like', source_norm_mnc, target_norm_mnc,
+           target_norm_res_mnc)
+    do_cmd('mincresample', '-like', source_norm_mnc, bet_mask_mnc,
+           bet_mask_res_mnc)
     return target_norm_res_mnc, source_norm_mnc, bet_mask_res_mnc
-
-
-def create_tmp_dir(path=os.path.join(os.getcwd(), 'tmp')):
-    ''' Creates tmp dir. Defaults to current_dir/tmp '''
-    os.makedirs(path, exist_ok=True)
-    tmp_dir = tempfile.mkdtemp(dir=path)
-    # tmp_dir = os.path.abspath(path)
-    return tmp_dir
 
 
 def rescale(values, new_min=0, new_max=1):
@@ -236,16 +229,15 @@ def rescale(values, new_min=0, new_max=1):
 
 def arr_image(input_im):
     ''' Convert image to numpy array '''
-    image = nib.load(input_im.abspath)
+    image = nib.load(str(input_im))
     image_data = image.get_data()
-    step('Loaded into array', input_im.abspath)
+    step('Loaded into array', input_im)
     return np.array(image_data)
 
 
-def arr_preprocessing(img_mask, img1, img2):
+def arr_preprocessing(img_mask, img1, img2, max_val):
     ''' Applying mask, smoothing model, intensity lookup '''
-    max_val = 300.0
-    arr_mask = arr_image(img_mask)
+    arr_mask = arr_image(str(img_mask))
     contrast1_masked = np.multiply(arr_image(img1), arr_mask)
     contrast2_masked = np.multiply(arr_image(img2), arr_mask)
 
