@@ -41,6 +41,8 @@ def get_args(args):
     parser.add_argument('--target', help='the target contrast', required=True)
     parser.add_argument('--source', help='the source contrast', required=True)
     parser.add_argument('--tmpdir', help='temporary directory', required=True)
+    parser.add_argument('--bet', help='bet/bet2/auto, default auto',
+                        default='auto')
     parser.add_argument('--maxval', help='max val, default 300', default=300.0)
     myargs = parser.parse_args(args)
     return myargs
@@ -66,7 +68,7 @@ def main():
     step('Input Source Contrast', source_mnc)
 
     target_norm_res_mnc, source_norm_mnc, bet_mask_res_mnc = generate_masks(
-        target_mnc, source_mnc, tmpdir)
+        target_mnc, source_mnc, tmpdir, myargs)
 
     arr1d_contrast1, contrast2_uint32, contrast2_unique_zero, \
     contrast2_unique_rescaled_fl64 = arr_preprocessing(
@@ -161,7 +163,7 @@ def get_dimension(img):
     return dim
 
 
-def generate_masks(target_mnc, source_mnc, tmpdir):
+def generate_masks(target_mnc, source_mnc, tmpdir, myargs):
     ''' Normalisation, Mask Generation and Resampling '''
     betdir = tmpdir/'bet'
     if not betdir.exists():
@@ -185,15 +187,24 @@ def generate_masks(target_mnc, source_mnc, tmpdir):
     do_cmd('mincnorm', source_mnc, source_norm_mnc)
     do_cmd('mnc2nii', target_norm_mnc, target_nii)
 
-    if shutil.which('bet2'):
-        do_cmd('bet2', target_nii, betdir/target_nii.stem,
-               '-m', '-f', '0.5', '-v')
-    elif shutil.which('bet'):
-        do_cmd('bet', target_nii, betdir/target_nii.stem,
-               '-R', '-m', '-f', '0.5', '-v')
+    if myargs.bet == 'auto' and shutil.which('bet2'):
+        bet = 'bet2'
+    elif myargs.bet == 'auto' and shutil.which('bet'):
+        bet = 'bet'
+    elif myargs.bet == 'bet2':
+        bet = 'bet2'
+    elif myargs.bet == 'bet':
+        bet = 'bet'
     else:
         step('bet/bet2 not found, terminating')
         quit()
+
+    if bet == 'bet2':
+        do_cmd('bet2', target_nii, betdir / target_nii.stem,
+               '-m', '-f', '0.5', '-v')
+    elif bet == 'bet':
+        do_cmd('bet', target_nii, betdir / target_nii.stem,
+               '-R', '-m', '-f', '0.5', '-v')
 
     if bet_mask_nii_gz.exists():
         do_cmd('gunzip', bet_mask_nii_gz)

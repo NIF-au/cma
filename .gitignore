@@ -1,1 +1,7 @@
+.gitignore
 run_cma.sh
+.idea/cma.iml
+.idea/inspectionProfiles/
+.idea/misc.xml
+.idea/modules.xml
+.idea/workspace.xml
