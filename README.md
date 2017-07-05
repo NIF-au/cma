@@ -15,7 +15,7 @@ The algorithm contains the following steps:
   6. A lookup table is generated on the basis of the spline function
   7. One of the models is converted using minclookup and the generated lookup table
 
-The algorithm is implemented as a script in Jupyter Notebook. 
+The algorithm is implemented in Python. 
 
 ## Software requirements
 
